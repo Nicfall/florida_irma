@@ -297,7 +297,7 @@ library(dada2)
 # }))
 # colnames(taxid) <- ranks; rownames(taxid) <- getSequences(seqtab.nochim)
 
-#also doing other taxonomy method:
+#doing other taxonomy method:
 #Assign Taxonomy
 taxa <- assignTaxonomy(seqtab.nochim, "~/Downloads/silva_nr_v132_train_set.fa.gz",tryRC=TRUE)
 unname(head(taxa))
@@ -316,7 +316,209 @@ write.csv(seqtab.nochim, file="mr16s_seqtab.nochim.csv")
 write.csv(seqtab.nochim, file="mr16s_seqtab.nochim_renamed.csv")
 
 #### Read in previously saved datafiles ####
-setwd("~/moorea_holobiont/mr_16S/")
-seqtab.nochim <- readRDS("mr16s_seqtab.nochim.rds")
-taxa <- readRDS("mr16s_taxa.rds")
-taxa.plus <- readRDS("mr16s_taxaplus.rds")
+setwd("~/florida_irma/fl16S")
+seqtab.nochim <- readRDS("flirma_seqtab.nochim.rds")
+taxa <- readRDS("fl16s_taxa.rds")
+taxa.plus <- readRDS("fl16s_taxaplus.rds")
+
+#~############################~#
+##### handoff 2 phyloseq #######
+#~############################~#
+
+#BiocManager::install("phyloseq")
+library('phyloseq')
+library('ggplot2')
+library('Rmisc')
+library('cowplot')
+
+#import dataframe holding sample information
+samdf<-read.csv("fl16s_sampledata.csv")
+head(samdf)
+rownames(samdf) <- samdf$sample_16s
+
+# Construct phyloseq object (straightforward from dada2 outputs)
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa.plus))
+
+ps
+
+#first look at data
+ps_glom <- tax_glom(ps, "Family")
+ps0 <- transform_sample_counts(ps_glom, function(x) x / sum(x))
+ps1 <- merge_samples(ps0, "transect_zone")
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+plot_bar(ps2, x="transect_zone", fill="Family")+
+  theme(legend.position="none")
+
+#phyloseq object with shorter names - doing this one instead of one above
+ids <- paste0("sq", seq(1, length(colnames(seqtab.nochim))))
+#making output fasta file for lulu step & maybe other things, before giving new ids to sequences
+#path='~/moorea_holobiont/mr_16s/mr16s.fasta'
+#uniquesToFasta(seqtab.nochim, path, ids = ids, mode = "w", width = 20000)
+
+colnames(seqtab.nochim)<-ids
+taxa2 <- cbind(taxa.plus, rownames(taxa.plus)) #retaining raw sequence info before renaming
+rownames(taxa2)<-ids
+
+#phyloseq object with new taxa ids
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa2))
+
+ps #79011 taxa
+
+#### remove mitochondria, chloroplasts, non-bacteria #### 
+ps.mito <- subset_taxa(ps, (Family=="Mitochondria"))
+ps.mito #944 taxa to remove
+ps.chlor <- subset_taxa(ps, (Order=="Chloroplast"))
+ps.chlor #1142 taxa to remove
+ps.notbact <- subset_taxa(ps, (Kingdom!="Bacteria") | is.na(Kingdom))
+ps.notbact #3912 taxa to remove
+
+ps.nomito <- subset_taxa(ps, (Family!="Mitochondria") | is.na(Family))
+ps.nomito #78067 taxa
+ps.nochlor <- subset_taxa(ps.nomito, (Order!="Chloroplast") | is.na(Order))
+ps.nochlor #76925 taxa
+ps.clean <- subset_taxa(ps.nochlor, (Kingdom=="Bacteria"))
+ps.clean #73013 taxa
+
+#just archaea
+ps.arch <- subset_taxa(ps.nomito, (Kingdom=="Archaea"))
+ps.arch #2608 taxa
+
+seqtab.clean <- data.frame(otu_table(ps.clean))
+write.csv(seqtab.clean,file="fl16s_seqtab.cleaned.csv")
+
+saveRDS(seqtab.clean, file="fl16s_seqtab.cleaned.rds")
+saveRDS(taxa2,file="fl16s_taxa2.rds")
+
+#### Read in previously saved datafiles ####
+setwd("~/florida_irma/fl16S")
+seqtab.clean <- readRDS("fl16s_seqtab.cleaned.rds")
+taxa2 <- readRDS("fl16s_taxa2.rds")
+samdf <- read.csv("fl16s_sampledata.csv")
+rownames(samdf) <- samdf$sample_16s
+
+#re-make phyloseq object if necessary
+ps.clean <- phyloseq(otu_table(seqtab.clean, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa2))
+ps.clean #should be 73013 taxa
+
+#remove some pdam & core samples
+ps.clean2 <- subset_samples(ps.clean, species!="pdam" & species!="cores")
+
+#just sids or rads
+ps.sid <- subset_samples(ps.clean2, species=="ssid")
+ps.rad <- subset_samples(ps.clean2, species!="srad")
+
+#just1516 <- subset_samples(ps.clean2, year==15 | year==16)
+#just18 <- subset_samples(ps.clean2, year==18)
+
+ps_glom <- tax_glom(ps.sid, "Family")
+ps0 <- transform_sample_counts(ps_glom, function(x) x / sum(x))
+ps1 <- merge_samples(ps0, "transect_zone_year")
+ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+plot_bar(ps2, x="transect_zone_year", fill="Family")+
+  theme(legend.position="none")+
+  facet_wrap(~transect)
+
+#### alpha diversity - un-rarefied  ####
+#Visualize alpha-diversity - ***Should be done on raw, untrimmed dataset***
+#total species diversity in a landscape (gamma diversity) is determined by two different things, the mean species diversity in sites or habitats at a more local scale (alpha diversity) and the differentiation among those habitats (beta diversity)
+#Shannon:Shannon entropy quantifies the uncertainty (entropy or degree of surprise) associated with correctly predicting which letter will be the next in a diverse string. Based on the weighted geometric mean of the proportional abundances of the types, and equals the logarithm of true diversity. When all types in the dataset of interest are equally common, the Shannon index hence takes the value ln(actual # of types). The more unequal the abundances of the types, the smaller the corresponding Shannon entropy. If practically all abundance is concentrated to one type, and the other types are very rare (even if there are many of them), Shannon entropy approaches zero. When there is only one type in the dataset, Shannon entropy exactly equals zero (there is no uncertainty in predicting the type of the next randomly chosen entity).
+#Simpson:equals the probability that two entities taken at random from the dataset of interest represent the same type. equal to the weighted arithmetic mean of the proportional abundances pi of the types of interest, with the proportional abundances themselves being used as the weights. Since mean proportional abundance of the types increases with decreasing number of types and increasing abundance of the most abundant type, λ obtains small values in datasets of high diversity and large values in datasets of low diversity. This is counterintuitive behavior for a diversity index, so often such transformations of λ that increase with increasing diversity have been used instead. The most popular of such indices have been the inverse Simpson index (1/λ) and the Gini–Simpson index (1 − λ).
+plot_richness(ps.sid, x="transect_zone_year", measures=c("Shannon", "Simpson","Observed"), color="zone") + theme_bw()
+
+df <- data.frame(estimate_richness(ps.sid, split=TRUE, measures=c("Shannon","InvSimpson","Observed")))
+df
+
+df$sample_16s <- rownames(df)
+df$sample_16s <- gsub("X","",df$sample_16s)
+df.div <- merge(df,samdf,by="sample_16s") #add sample data
+
+write.csv(df,file="fl16s_diversity_sids.csv") #saving
+df.div <- read.csv("fl16s_diversity_sids.csv") #reading back in 
+
+quartz()
+gg.sh <- ggplot(df.div, aes(x=zone, y=Shannon,color=zone,shape=zone))+
+  geom_boxplot(outlier.shape=NA)+
+  xlab("Reef zone")+
+  ylab("Shannon diversity")+
+  theme_cowplot()+
+  facet_wrap(~transect*year)
+gg.sh
+
+  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  theme(text=element_text(family="Times"),legend.position="none")+
+  geom_jitter(alpha=0.5)+
+
+
+gg.si <- ggplot(df.div, aes(x=zone, y=InvSimpson,color=zone,shape=zone))+
+  geom_boxplot(outlier.shape=NA)+
+  xlab("Reef zone")+
+  ylab("Inv. Simpson diversity")+
+  theme_cowplot()+
+  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  theme(text=element_text(family="Times"),legend.position="none")+
+  geom_jitter(alpha=0.5)+
+  facet_wrap(~site)
+gg.si
+
+gg.obs <- ggplot(df.div, aes(x=zone, y=Observed,color=zone,shape=zone))+
+  geom_boxplot(outlier.shape=NA)+
+  xlab("Reef zone")+
+  ylab("Shannon diversity")+
+  theme_cowplot()+
+  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  theme(text=element_text(family="Times"),legend.position="none")+
+  geom_jitter(alpha=0.5)+
+  facet_wrap(~site)
+gg.obs
+
+shapiro.test(df.div$Observed) #nope
+df.div$obs.log <- log(df.div$Observed)
+shapiro.test(df.div$obs.log) #yessss
+
+a.div <- aov(Observed~site*zone,data=df.div)
+summary(a.div)
+TukeyHSD(a.div) #nothing except MSE
+
+shapiro.test(df.div$Shannon)
+hist(df.div$Shannon) #NORMAL
+
+df.div$si.log <- log(df.div$InvSimpson)
+shapiro.test(df.div$InvSimpson) #not normal
+shapiro.test(df.div$si.log) #NORMAL
+
+a.div <- aov(Shannon~site*zone,data=df.div)
+summary(a.div)
+TukeyHSD(a.div) #nothing
+
+a.div <- aov(InvSimpson~site*zone,data=df.div)
+TukeyHSD(a.div) #nothing
+
+mnw <- subset(df.div,site=="MNW")
+mse <- subset(df.div,site=="MSE")
+tah <- subset(df.div,site=="TNW")
+
+summary(aov(Shannon~zone,data=mnw)) #0.439
+wilcox.test(Shannon~zone,data=mnw) #nope
+summary(aov(Shannon~zone,data=mse)) #0.1
+wilcox.test(Shannon~zone,data=mse) #so close - 0.05022
+summary(aov(Shannon~zone,data=tah)) #0.295
+wilcox.test(Shannon~zone,data=tah) #nope
+
+summary(aov(si.log~zone,data=mnw)) #0.67
+summary(aov(si.log~zone,data=mse)) #0.157
+summary(aov(si.log~zone,data=tah)) #0.238
+
+
+
