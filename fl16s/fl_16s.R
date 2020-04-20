@@ -400,6 +400,8 @@ taxa2 <- readRDS("fl16s_taxa2.rds")
 samdf <- read.csv("fl16s_sampledata.csv")
 rownames(samdf) <- samdf$sample_16s
 
+library("phyloseq")
+
 #re-make phyloseq object if necessary
 ps.clean <- phyloseq(otu_table(seqtab.clean, taxa_are_rows=FALSE), 
                sample_data(samdf), 
@@ -411,8 +413,34 @@ ps.clean2 <- subset_samples(ps.clean, species!="pdam" & species!="cores")
 
 #just sids or rads
 ps.sid <- subset_samples(ps.clean2, species=="ssid")
-ps.rad <- subset_samples(ps.clean2, species!="srad")
+ps.rad <- subset_samples(ps.clean2, species=="srad")
 
+#save sids & rads tables
+seqtab.sid <- data.frame(otu_table(ps.sid))
+seqtab.rad <- data.frame(otu_table(ps.rad))
+
+#many are 0 total counts
+sid.zero = seqtab.sid[,colSums(seqtab.sid) == 0]
+ncol(sid.zero) #44389
+removecols.sid <- c(colnames(sid.zero))
+seqtab.sid.no0 <- seqtab.sid[,!(colnames(seqtab.sid) %in% removecols.sid)]
+
+#many are 0 total counts
+rad.zero = seqtab.rad[,colSums(seqtab.rad) == 0]
+ncol(rad.zero) #14008
+removecols.rad <- c(colnames(rad.zero))
+seqtab.rad.no0 <- seqtab.rad[,!(colnames(seqtab.rad) %in% removecols.rad)]
+
+saveRDS(seqtab.sid.no0, file="fl16s_seqtab.sid.rds")
+saveRDS(seqtab.rad.no0, file="fl16s_seqtab.rad.rds")
+
+samdf.sid <- data.frame(sample_data(ps.sid))
+samdf.rad <- data.frame(sample_data(ps.rad))
+
+write.csv(samdf.sid, file="fl16s_samdf.sid.csv")
+write.csv(samdf.rad, file="fl16s_samdf.rad.csv")
+
+#### put somewhere ####
 #just1516 <- subset_samples(ps.clean2, year==15 | year==16)
 #just18 <- subset_samples(ps.clean2, year==18)
 
@@ -424,7 +452,7 @@ plot_bar(ps2, x="transect_zone_year", fill="Family")+
   theme(legend.position="none")+
   facet_wrap(~transect)
 
-#### alpha diversity - un-rarefied  ####
+#### alpha diversity - un-rarefied - not updated yet! ####
 #Visualize alpha-diversity - ***Should be done on raw, untrimmed dataset***
 #total species diversity in a landscape (gamma diversity) is determined by two different things, the mean species diversity in sites or habitats at a more local scale (alpha diversity) and the differentiation among those habitats (beta diversity)
 #Shannon:Shannon entropy quantifies the uncertainty (entropy or degree of surprise) associated with correctly predicting which letter will be the next in a diverse string. Based on the weighted geometric mean of the proportional abundances of the types, and equals the logarithm of true diversity. When all types in the dataset of interest are equally common, the Shannon index hence takes the value ln(actual # of types). The more unequal the abundances of the types, the smaller the corresponding Shannon entropy. If practically all abundance is concentrated to one type, and the other types are very rare (even if there are many of them), Shannon entropy approaches zero. When there is only one type in the dataset, Shannon entropy exactly equals zero (there is no uncertainty in predicting the type of the next randomly chosen entity).
@@ -519,6 +547,77 @@ wilcox.test(Shannon~zone,data=tah) #nope
 summary(aov(si.log~zone,data=mnw)) #0.67
 summary(aov(si.log~zone,data=mse)) #0.157
 summary(aov(si.log~zone,data=tah)) #0.238
+
+#### trim underrepresented ASVs ####
+library(MCMC.OTU)
+
+#formatting the table for mcmc.otu - requires one first column that's 1 through whatever
+#& has "X" as column name
+nums.sid <- 1:nrow(seqtab.sid.no0)
+samples.sid <- rownames(seqtab.sid.no0)
+
+sid.int <- cbind(sample = 0, seqtab.sid.no0)
+sid.formcmc <- cbind(X = 0, sid.int)
+
+sid.formcmc$X <- nums.sid
+sid.formcmc$sample <- samples.sid
+
+#now for radians
+nums.rad <- 1:nrow(seqtab.rad.no0)
+samples.rad <- rownames(seqtab.rad.no0)
+
+rad.int <- cbind(sample = 0, seqtab.rad.no0)
+rad.formcmc <- cbind(X = 0, rad.int)
+
+rad.formcmc$X <- nums.rad
+rad.formcmc$sample <- samples.rad
+
+#regular
+seq.trim.sid <- purgeOutliers(sid.formcmc,count.columns=3:28626,sampleZcut=-2.5,otu.cut=0.0001,zero.cut=0.015)
+#3 bad samples - "C10" "E8"  "H6"
+#673 ASVs passing cutoff for reads
+#611 ASVs show up in 1.5% of samples (approximately 2-3 samples?)
+#remove bad samples from sample data frame
+row.names.remove <- c("C10","E8","H6")
+samdf.trim.sid <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
+
+#### radians - leaving for now ####
+seq.trim.rad <- purgeOutliers(rad.formcmc,count.columns=3:28626,sampleZcut=-2.5,otu.cut=0.0001,zero.cut=0.015)
+
+#remove sample info
+seq.trim.sid <- seq.trim.sid[,3:613] #regular (not rarefied)
+
+write.csv(seq.trim.sid,file="seq.trim.sid.1e4.csv")
+seq.trim.sid <- read.csv("seq.trim.sid.1e4.csv",row.names=1)
+
+#### some subsampling for CS506 project: ####
+samdf.sid.1516 <- subset(samdf.sid, year==15 | year==16 & transect!="Biscayne")
+samdf.sid.17 <- subset(samdf.sid,year==17 & transect!="Biscayne")
+samdf.sid.18 <- subset(samdf.sid,year==18 & transect!="Biscayne")
+
+samples.sid.1516 <- rownames(samdf.sid.1516)
+samples.sid.17 <- rownames(samdf.sid.17)
+samples.sid.18 <- rownames(samdf.sid.18)
+
+seq.trim.sid.1516 <- seq.trim.sid[(row.names(seq.trim.sid) %in% samples.sid.1516), ]
+zeros.1516 = seq.trim.sid.1516[,colSums(seq.trim.sid.1516) == 0]
+removecols.1516 <- c(colnames(zeros.1516))
+seq.trim.sid.1516.no0 <- seq.trim.sid.1516[,!(colnames(seq.trim.sid.1516) %in% removecols.1516)]
+
+seq.trim.sid.17 <- seq.trim.sid[(row.names(seq.trim.sid) %in% samples.sid.17), ]
+zeros.17 = seq.trim.sid.17[,colSums(seq.trim.sid.17) == 0]
+removecols.17 <- c(colnames(zeros.17))
+seq.trim.sid.17.no0 <- seq.trim.sid.17[,!(colnames(seq.trim.sid.17) %in% removecols.17)]
+
+seq.trim.sid.18 <- seq.trim.sid[(row.names(seq.trim.sid) %in% samples.sid.18), ]
+zeros.18 = seq.trim.sid.18[,colSums(seq.trim.sid.18) == 0]
+removecols.18 <- c(colnames(zeros.18))
+seq.trim.sid.18.no0 <- seq.trim.sid.18[,!(colnames(seq.trim.sid.18) %in% removecols.18)]
+
+write.csv(seq.trim.sid.1516.no0,file="seq.trim.sid.1516.no0.csv")
+write.csv(seq.trim.sid.17.no0,file="seq.trim.sid.17.no0.csv")
+write.csv(seq.trim.sid.18.no0,file="seq.trim.sid.18.no0.csv")
+
 
 
 
