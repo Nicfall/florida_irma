@@ -434,25 +434,62 @@ seqtab.rad.no0 <- seqtab.rad[,!(colnames(seqtab.rad) %in% removecols.rad)]
 saveRDS(seqtab.sid.no0, file="fl16s_seqtab.sid.rds")
 saveRDS(seqtab.rad.no0, file="fl16s_seqtab.rad.rds")
 
+#### read in files here too ####
+seqtab.sid.no0 <- readRDS(file="fl16s_seqtab.sid.rds")
+seqtab.rad.no0 <- readRDS(file="fl16s_seqtab.rad.rds")
+
 samdf.sid <- data.frame(sample_data(ps.sid))
 samdf.rad <- data.frame(sample_data(ps.rad))
 
 write.csv(samdf.sid, file="fl16s_samdf.sid.csv")
 write.csv(samdf.rad, file="fl16s_samdf.rad.csv")
 
-#### put somewhere ####
-#just1516 <- subset_samples(ps.clean2, year==15 | year==16)
-#just18 <- subset_samples(ps.clean2, year==18)
+samdf.sid <- read.csv("fl16s_samdf.sid.csv",row.names=1)
+samdf.rad <- read.csv("fl16s_samdf.rad.csv",row.names=1)
 
-ps_glom <- tax_glom(ps.sid, "Family")
-ps0 <- transform_sample_counts(ps_glom, function(x) x / sum(x))
-ps1 <- merge_samples(ps0, "transect_zone_year")
-ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
-plot_bar(ps2, x="transect_zone_year", fill="Family")+
-  theme(legend.position="none")+
-  facet_wrap(~transect)
+# #### put somewhere ####
+# #just1516 <- subset_samples(ps.clean2, year==15 | year==16)
+# #just18 <- subset_samples(ps.clean2, year==18)
+# 
+# ps_glom <- tax_glom(ps.sid, "Family")
+# ps0 <- transform_sample_counts(ps_glom, function(x) x / sum(x))
+# ps1 <- merge_samples(ps0, "transect_zone_year")
+# ps2 <- transform_sample_counts(ps1, function(x) x / sum(x))
+# plot_bar(ps2, x="transect_zone_year", fill="Family")+
+#   theme(legend.position="none")+
+#   facet_wrap(~transect)
 
-#### alpha diversity - un-rarefied - not updated yet! ####
+#### rarefy ####
+library(vegan)
+
+rarecurve(seqtab.sid.no0,step=100,label=FALSE) #after removing contaminants
+
+total <- rowSums(seqtab.sid.no0)
+toofew <- subset(total, total <9100)
+#20 samples to remove, ouch
+
+row.names.remove <- c(names(toofew))
+seqtab.sid.less <- seqtab.sid.no0[!(row.names(seqtab.sid.no0) %in% row.names.remove),]
+samdf.sid.rare <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
+#173 samples left (168 first round through, rarefying to 11627)
+
+seqtab.sid.rare <- rrarefy(seqtab.sid.less,sample=9100)
+#rarecurve(seqtab.rare,step=100,label=FALSE)
+saveRDS(seqtab.sid.rare, file="seqtab.sid.rare9100.rds")
+
+sid.rare.zero = seqtab.sid.rare[,colSums(seqtab.sid.rare) == 0]
+ncol(sid.rare.zero) #3661
+removecols.sid <- c(colnames(sid.rare.zero))
+seqtab.sid.rare.no0 <- seqtab.sid.rare[,!(colnames(seqtab.sid.rare) %in% removecols.sid)]
+
+samdf.sid.rare$year <- as.factor(samdf.sid.rare$yea)
+#phyloseq object but rarefied
+ps.sid.rare <- phyloseq(otu_table(seqtab.sid.rare.no0, taxa_are_rows=FALSE), 
+                    sample_data(samdf.sid.rare), 
+                    tax_table(taxa2))
+ps.sid.rare #24526 taxa after removing 0s
+
+#### alpha diversity ####
 #Visualize alpha-diversity - ***Should be done on raw, untrimmed dataset***
 #total species diversity in a landscape (gamma diversity) is determined by two different things, the mean species diversity in sites or habitats at a more local scale (alpha diversity) and the differentiation among those habitats (beta diversity)
 #Shannon:Shannon entropy quantifies the uncertainty (entropy or degree of surprise) associated with correctly predicting which letter will be the next in a diverse string. Based on the weighted geometric mean of the proportional abundances of the types, and equals the logarithm of true diversity. When all types in the dataset of interest are equally common, the Shannon index hence takes the value ln(actual # of types). The more unequal the abundances of the types, the smaller the corresponding Shannon entropy. If practically all abundance is concentrated to one type, and the other types are very rare (even if there are many of them), Shannon entropy approaches zero. When there is only one type in the dataset, Shannon entropy exactly equals zero (there is no uncertainty in predicting the type of the next randomly chosen entity).
@@ -461,41 +498,59 @@ plot_richness(ps.sid, x="transect_zone_year", measures=c("Shannon", "Simpson","O
 
 df <- data.frame(estimate_richness(ps.sid, split=TRUE, measures=c("Shannon","InvSimpson","Observed")))
 df
+df <- data.frame(estimate_richness(ps.sid.rare, split=TRUE, measures=c("Shannon","InvSimpson","Observed")))
 
 df$sample_16s <- rownames(df)
 df$sample_16s <- gsub("X","",df$sample_16s)
-df.div <- merge(df,samdf,by="sample_16s") #add sample data
+df.div <- merge(df,samdf.sid.rare,by="sample_16s") #add sample data
 
 write.csv(df,file="fl16s_diversity_sids.csv") #saving
 df.div <- read.csv("fl16s_diversity_sids.csv") #reading back in 
 
+#concatenating 15 with 16
+df.div$year <- gsub("16","15",df.div$year)
+df.div$year <- as.factor(df.div$year)
+df.div.nobis <- subset(df.div,transect!="Biscayne")
+
 quartz()
-gg.sh <- ggplot(df.div, aes(x=zone, y=Shannon,color=zone,shape=zone))+
+#zone
+gg.sh <- ggplot(df.div.nobis, aes(x=zone, y=Shannon,color=zone,shape=zone))+
   geom_boxplot(outlier.shape=NA)+
   xlab("Reef zone")+
   ylab("Shannon diversity")+
   theme_cowplot()+
   facet_wrap(~transect*year)
 gg.sh
+  # scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  # scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  # #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  # theme(text=element_text(family="Times"),legend.position="none")+
+  # geom_jitter(alpha=0.5)+
 
-  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
-  scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
-  #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
-  theme(text=element_text(family="Times"),legend.position="none")+
-  geom_jitter(alpha=0.5)+
-
-
-gg.si <- ggplot(df.div, aes(x=zone, y=InvSimpson,color=zone,shape=zone))+
+gg.sh <- ggplot(df.div.nobis, aes(x=year,y=Shannon,color=year))+
   geom_boxplot(outlier.shape=NA)+
+  xlab("Year")+
+  ylab("Shannon diversity")+
+  theme_cowplot()+
+  facet_wrap(~transect)+
+  scale_color_manual(values=c("#781C6D","#F8850F","#AE305C"),name="Time point",labels=c("Baseline","Irma","Post-Irma"))+
+  scale_x_discrete(labels=c("2015","2017","2018"))+
+  theme(axis.text.x=element_text(angle=45,hjust=1))
+quartz()
+gg.sh
+
+gg.si <- ggplot(df.div.nobis, aes(x=transect, y=InvSimpson,color=year,shape=year))+
+  geom_boxplot()+
   xlab("Reef zone")+
   ylab("Inv. Simpson diversity")+
   theme_cowplot()+
-  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
-  scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  ylim(0,100)#+
+  #scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  #scale_colour_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
   #guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
-  theme(text=element_text(family="Times"),legend.position="none")+
-  geom_jitter(alpha=0.5)+
-  facet_wrap(~site)
+  #theme(text=element_text(family="Times"),legend.position="none")+
+  #geom_jitter(alpha=0.5)#+
+  #facet_wrap(~site)
 gg.si
 
 gg.obs <- ggplot(df.div, aes(x=zone, y=Observed,color=zone,shape=zone))+
@@ -511,42 +566,116 @@ gg.obs <- ggplot(df.div, aes(x=zone, y=Observed,color=zone,shape=zone))+
   facet_wrap(~site)
 gg.obs
 
-shapiro.test(df.div$Observed) #nope
-df.div$obs.log <- log(df.div$Observed)
-shapiro.test(df.div$obs.log) #yessss
+#stats
+shapiro.test(df.div.nobis$Observed)
+df.div.nobis$obs.log <- log(df.div.nobis$Observed)
+shapiro.test(df.div.nobis$obs.log)
 
-a.div <- aov(Observed~site*zone,data=df.div)
-summary(a.div)
-TukeyHSD(a.div) #nothing except MSE
+a.all <- aov(obs.log~year*transect,data=df.div.nobis)
+summary(a.all)
+TukeyHSD(a.all) #NOTHING
 
-shapiro.test(df.div$Shannon)
-hist(df.div$Shannon) #NORMAL
+#stats
+shapiro.test(df.div.nobis$Shannon)
+df.div.nobis$sh.log <- log(df.div.nobis$Shannon)
+shapiro.test(df.div.nobis$sh.log)
 
-df.div$si.log <- log(df.div$InvSimpson)
-shapiro.test(df.div$InvSimpson) #not normal
-shapiro.test(df.div$si.log) #NORMAL
+a.all <- aov(Shannon~year*transect,data=df.div.nobis)
+summary(a.all)
+TukeyHSD(a.all) #nothing
 
-a.div <- aov(Shannon~site*zone,data=df.div)
-summary(a.div)
-TukeyHSD(a.div) #nothing
+a.all <- aov(InvSimpson~year*transect,data=df.div.nobis)
+summary(a.all)
+TukeyHSD(a.all) #nothing
 
-a.div <- aov(InvSimpson~site*zone,data=df.div)
-TukeyHSD(a.div) #nothing
+div.low <- subset(df.div.nobis,transect=="Lower")
+div.mid <- subset(df.div.nobis,transect=="Middle")
+div.upp <- subset(df.div.nobis,transect=="Upper")
 
-mnw <- subset(df.div,site=="MNW")
-mse <- subset(df.div,site=="MSE")
-tah <- subset(df.div,site=="TNW")
+#lower transect - OTU number
+shapiro.test(div.low$Observed) #nope
+div.low$obs.log <- log(div.low$Observed)
+shapiro.test(div.low$obs.log) #yessss
 
-summary(aov(Shannon~zone,data=mnw)) #0.439
-wilcox.test(Shannon~zone,data=mnw) #nope
-summary(aov(Shannon~zone,data=mse)) #0.1
-wilcox.test(Shannon~zone,data=mse) #so close - 0.05022
-summary(aov(Shannon~zone,data=tah)) #0.295
-wilcox.test(Shannon~zone,data=tah) #nope
+a.div.low <- aov(obs.log~year,data=div.low)
+summary(a.div.low)
+TukeyHSD(a.div.low) #nothing
 
-summary(aov(si.log~zone,data=mnw)) #0.67
-summary(aov(si.log~zone,data=mse)) #0.157
-summary(aov(si.log~zone,data=tah)) #0.238
+#lower transect - Shannon
+shapiro.test(div.low$Shannon) #nope
+div.low$sh.log <- logb(div.low$Shannon, base=10)
+shapiro.test(div.low$sh.log) 
+
+a.div.low <- aov(sh.log~year*zone,data=div.low)
+summary(a.div.low)
+TukeyHSD(a.div.low) #nothing
+
+#lower transect - simpson
+shapiro.test(div.low$InvSimpson) #nope
+div.low$si.log <- log(div.low$InvSimpson)
+shapiro.test(div.low$si.log) #no
+
+a.div.low <- aov(InvSimpson~year*zone,data=div.low)
+summary(a.div.low)
+TukeyHSD(a.div.low) #nothing
+
+div.low15 <- subset(div.low,year=="15")
+div.low17 <- subset(div.low,year=="17")
+div.low18 <- subset(div.low,year=="18")
+
+wilcox.test(InvSimpson~zone,data=div.low15) #yes
+wilcox.test(InvSimpson~zone,data=div.low17) #nope
+wilcox.test(InvSimpson~zone,data=div.low18) #nope
+
+#mid transect - OTU number
+shapiro.test(div.mid$Observed) #nope
+div.mid$obs.log <- log(div.mid$Observed)
+shapiro.test(div.mid$obs.log) #yessss
+
+a.div.mid <- aov(obs.log~year*zone,data=div.mid)
+summary(a.div.mid)
+TukeyHSD(a.div.mid) #nothing
+
+#mid transect - Shannon
+shapiro.test(div.mid$Shannon) #good
+
+a.div.mid <- aov(Shannon~year*zone,data=div.mid)
+summary(a.div.mid)
+TukeyHSD(a.div.mid) #nothing
+
+#mid transect - simpson
+shapiro.test(div.mid$InvSimpson) #nope
+div.mid$si.log <- log(div.mid$InvSimpson)
+shapiro.test(div.mid$si.log) #yes
+
+a.div.mid <- aov(InvSimpson~year*zone,data=div.mid)
+summary(a.div.mid)
+TukeyHSD(a.div.mid) #nothing
+
+#upp transect - OTU number
+shapiro.test(div.upp$Observed) #nope
+div.upp$obs.log <- log(div.upp$Observed)
+shapiro.test(div.upp$obs.log) #yessss
+
+a.div.upp <- aov(obs.log~year*zone,data=div.upp)
+summary(a.div.upp)
+TukeyHSD(a.div.upp) #nothing
+
+#upp transect - Shannon
+shapiro.test(div.upp$Shannon) #good
+
+a.div.upp <- aov(Shannon~year*zone,data=div.upp)
+summary(a.div.upp)
+TukeyHSD(a.div.upp) #nothing
+
+#upp transect - simpson
+shapiro.test(div.upp$InvSimpson) #nope
+div.upp$si.log <- log(div.upp$InvSimpson)
+shapiro.test(div.upp$si.log) #yes
+
+a.div.upp <- aov(InvSimpson~year*zone,data=div.upp)
+summary(a.div.upp)
+TukeyHSD(a.div.upp) #nothing
 
 #### trim underrepresented ASVs ####
 library(MCMC.OTU)
@@ -573,10 +702,10 @@ rad.formcmc$X <- nums.rad
 rad.formcmc$sample <- samples.rad
 
 #regular
-seq.trim.sid <- purgeOutliers(sid.formcmc,count.columns=3:28626,sampleZcut=-2.5,otu.cut=0.0001,zero.cut=0.015)
+seq.trim.sid <- purgeOutliers(sid.formcmc,count.columns=3:28626,sampleZcut=-2.5,otu.cut=0.0001,zero.cut=0.02)
 #3 bad samples - "C10" "E8"  "H6"
 #673 ASVs passing cutoff for reads
-#611 ASVs show up in 1.5% of samples (approximately 2-3 samples?)
+#584 ASVs show up in 2% of samples
 #remove bad samples from sample data frame
 row.names.remove <- c("C10","E8","H6")
 samdf.trim.sid <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
@@ -585,10 +714,189 @@ samdf.trim.sid <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
 seq.trim.rad <- purgeOutliers(rad.formcmc,count.columns=3:28626,sampleZcut=-2.5,otu.cut=0.0001,zero.cut=0.015)
 
 #remove sample info
-seq.trim.sid <- seq.trim.sid[,3:613] #regular (not rarefied)
+seq.trim.sid <- seq.trim.sid[,3:584] #regular (not rarefied)
 
 write.csv(seq.trim.sid,file="seq.trim.sid.1e4.csv")
 seq.trim.sid <- read.csv("seq.trim.sid.1e4.csv",row.names=1)
+
+#remake phyloseq object
+ps.sid.trim <- phyloseq(otu_table(seq.trim.sid, taxa_are_rows=FALSE), 
+                        sample_data(samdf.sid), 
+                        tax_table(taxa2))
+ps.sid.trim #611 taxa left, 582 after more strict 2% of samples
+
+#### trying alpha diversity again post-trim ####
+df <- data.frame(estimate_richness(ps.sid.trim, split=TRUE, measures=c("Shannon","InvSimpson","Observed")))
+
+df$sample_16s <- rownames(df)
+df$sample_16s <- gsub("X","",df$sample_16s)
+df.div <- merge(df,samdf.sid,by="sample_16s") #add sample data
+
+write.csv(df,file="fl16s_diversity_sids.csv") #saving
+df.div <- read.csv("fl16s_diversity_sids.csv") #reading back in 
+
+#concatenating 15 with 16
+df.div$year <- gsub("16","15",df.div$year)
+df.div.nobis <- subset(df.div,transect!="Biscayne")
+
+quartz()
+#zone
+gg.sh <- ggplot(df.div.nobis, aes(x=zone, y=Shannon,color=zone,shape=zone))+
+  geom_boxplot(outlier.shape=NA)+
+  xlab("Reef zone")+
+  ylab("Shannon diversity")+
+  theme_cowplot()+
+  facet_wrap(~transect*year)
+gg.sh
+
+#year
+gg.sh <- ggplot(df.div.nobis, aes(x=year, y=Observed))+
+  geom_boxplot(outlier.shape=NA)+
+  xlab("Reef zone")+
+  ylab("Shannon diversity")+
+  theme_cowplot()+
+  facet_wrap(~transect)
+gg.sh
+
+#### rarefy trimmed ####
+library(vegan)
+
+rarecurve(seq.trim.sid,step=100,label=FALSE) #after removing contaminats
+
+total <- rowSums(seq.trim.sid)
+toofew <- subset(total, total <2175)
+toofew
+#19 samples to remove ~10%)
+
+row.names.remove <- c(names(toofew))
+seq.trim.sid.less <- seq.trim.sid[!(row.names(seq.trim.sid) %in% row.names.remove),]
+samdf.trim.sid.rare <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
+#174 samples left being strict
+
+seq.trim.sid.rare <- rrarefy(seq.trim.sid.less,sample=2175)
+rarecurve(seq.trim.sid.rare,step=100,label=FALSE)
+
+#phyloseq object but rarefied
+samdf.trim.sid.rare$year <- as.factor(samdf.trim.sid.rare$year)
+samdf.trim.sid.rare$year <- gsub("16","15",samdf.trim.sid.rare$year)
+samdf.trim.sid.rare.nobis <- subset(samdf.trim.sid.rare,transect!="Biscayne")
+ps.trim.sid.rare <- phyloseq(otu_table(seq.trim.sid.rare, taxa_are_rows=FALSE), 
+                        sample_data(samdf.trim.sid.rare.nobis), 
+                        tax_table(taxa2))
+ps.trim.sid.rare #582 taxa, 171 samples
+
+#### pcoa plots - batch effect :( ####
+library(stats)
+library(MCMC.OTU)
+
+#transform to relative abundance
+ps.trim.sid.rel <- transform_sample_counts(ps.trim.sid.rare, function(x) x / sum(x))
+ord <- ordinate(ps.trim.sid.rel, "PCoA", "bray")
+plot_ordination(ps.trim.sid.rel, ord,color="year", shape="year",axes=1:2)+
+  stat_ellipse()#+
+  facet_wrap(~transect)
+
+#saving
+seq.trim.rel <- data.frame(otu_table(ps.trim.rel))
+
+ord <- ordinate(ps.trim.sid.rare, "PCoA", "bray")
+plot_ordination(ps.trim.sid.rare, ord,color="transect", shape="year")+
+  stat_ellipse()
+
+#now by site
+ps.low <- subset_samples(ps.trim.sid.rare,transect=="Lower")
+#ps.mnw <- subset_samples(ps.rare.trim,site=="MNW")
+ord.low <- ordinate(ps.low, "PCoA", "bray")
+gg.low <- plot_ordination(ps.low, ord.low,color="year",axes=1:2)+
+  geom_point(size=2)+
+  stat_ellipse()+
+  theme_cowplot()+  
+  scale_color_manual(name="Time point",values=c("#781C6D","#F8850F","#AE305C"),labels=c("Baseline","Irma","Post-Irma"))
+
+gg.low
+gg.mid
+gg.upp
+
+library(ggpubr)
+quartz()
+ggarrange(gg.low,gg.mid,gg.upp,nrow=1,common.legend=TRUE,legend="right",labels="AUTO")
+
+#now by site
+ps.low <- subset_samples(ps.trim.sid.rare,transect=="Upper")
+#ps.mnw <- subset_samples(ps.rare.trim,site=="MNW")
+ord.low <- ordinate(ps.low, "PCoA", "bray")
+plot_ordination(ps.low, ord.low,color="year",axes=1:2)+
+  geom_point(size=2)+
+  stat_ellipse()+
+  theme_cowplot()+
+  scale_color_manual(name="Time point",values=c("#781C6D","#F8850F","#AE305C"),labels=c("Baseline","Irma","Post-Irma"))
+
+#### pcoa stats ####
+library("funfuns")
+sid.low.otu <- data.frame(ps.low@otu_table)
+sid.low.dat <- data.frame(ps.low@sam_data)
+pairwise.adonis(sid.low.otu, factors = sid.low.dat$year, permutations = 999)
+
+dist.seqtab <- vegdist(sid.low.otu)
+bet.all <- betadisper(dist.seqtab,sid.low.dat$year)
+anova(bet.all)
+#not sig - rel or not
+plot(bet.all)
+adonis(sid.low.otu ~ year, data=sid.low.dat, permutations=999)
+#low - all sig different
+#mid - all sig different
+#upp - all sig different
+
+#overall
+row.names.keep <- c(row.names(seq.trim.sid.rare))
+samdf.trim.sid.rare.nobis2 <- samdf.sid[(row.names(samdf.sid) %in% row.names.keep), ]
+adonis(seq.trim.sid.rare~year*transect, data=samdf.trim.sid.rare.nobis2,permutations=999)
+#all sig
+
+ps.mse <- subset_samples(ps.trim.rel,site=="MSE")
+#ps.mse <- subset_samples(ps.trim,site=="MSE")
+ord.mse <- ordinate(ps.mse, "PCoA", "bray")
+gg.mse <- plot_ordination(ps.mse, ord.mse,color="zone", shape="zone")+
+  geom_point(size=2)+
+  stat_ellipse()+
+  theme_cowplot()+
+  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  scale_color_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  ggtitle("Moorea SE")+
+  annotate(geom="text", x=-0.35, y=0.55, label="p < 0.01**",size=4)+#change for non-rarefied
+  #xlab("Axis 1 (33.1%)")+ #rarefied
+  #ylab("Axis 2 (22.2%)")+ #rarefied
+  xlab("Axis 1 (27.9%)")+#non-rarefied
+  ylab("Axis 2 (19%)")+#non-rarefied
+  theme(axis.text=element_text(size=10))
+gg.mse
+
+ps.tnw <- subset_samples(ps.trim.rel,site=="TNW")
+#ps.tnw <- subset_samples(ps.trim,site=="TNW")
+ord.tnw <- ordinate(ps.tnw, "PCoA", "bray")
+gg.tnw <- plot_ordination(ps.tnw, ord.tnw,color="zone", shape="zone")+
+  geom_point(size=2)+
+  stat_ellipse()+
+  theme_cowplot()+
+  scale_shape_manual(values=c(16,15),labels=c("Back reef","Fore reef"))+
+  scale_color_manual(values=c("#ED7953FF","#8405A7FF"),labels=c("Back reef","Fore reef"))+
+  guides(color=guide_legend(title="Reef zone"),shape=guide_legend(title="Reef zone"))+
+  ggtitle("Tahiti NW")+
+  #annotate(geom="text", x=-0.4, y=0.6, label="p < 0.01**",size=4)+ #rarefied
+  annotate(geom="text", x=-0.25, y=0.6, label="p < 0.01**",size=4)+ #not rarefied
+  #xlab("Axis 1 (42.6%)")+ #rarefied
+  #ylab("Axis 2 (27.9%)")+ #rarefied
+  xlab("Axis 1 (34.3%)")+#non-rarefied
+  ylab("Axis 2 (26.5%)")+#non-rarefied
+  theme(axis.text=element_text(size=10))
+gg.tnw
+
+#### pcoa plot ####
+library(ggpubr)
+
+quartz()
+ggarrange(gg.mnw,gg.mse,gg.tnw,nrow=1,common.legend=TRUE,legend="right",labels="AUTO")
 
 #### some subsampling for CS506 project: ####
 samdf.sid.1516 <- subset(samdf.sid, year==15 | year==16 & transect!="Biscayne")
@@ -618,6 +926,89 @@ write.csv(seq.trim.sid.1516.no0,file="seq.trim.sid.1516.no0.csv")
 write.csv(seq.trim.sid.17.no0,file="seq.trim.sid.17.no0.csv")
 write.csv(seq.trim.sid.18.no0,file="seq.trim.sid.18.no0.csv")
 
+#### round 2 - conglomerate by family ####
+#### rename ASVs ####
+library(rlang)
+library(stringr)
+
+tax <- as.data.frame(ps.trim.sid.rare@tax_table@.Data)
+
+tax.clean <- data.frame(row.names = row.names(tax),
+                        Kingdom = str_replace(tax[,1], "D_0__",""),
+                        Phylum = str_replace(tax[,2], "D_1__",""),
+                        Class = str_replace(tax[,3], "D_2__",""),
+                        Order = str_replace(tax[,4], "D_3__",""),
+                        Family = str_replace(tax[,5], "D_4__",""),
+                        Genus = str_replace(tax[,6], "D_5__",""),
+                        Species = str_replace(tax[,7], "D_6__",""),
+                        stringsAsFactors = FALSE)
+tax.clean[is.na(tax.clean)] <- ""
+
+for (i in 1:7){ tax.clean[,i] <- as.character(tax.clean[,i])}
+####### Fill holes in the tax table
+tax.clean[is.na(tax.clean)] <- ""
+for (i in 1:nrow(tax.clean)){
+  if (tax.clean[i,2] == ""){
+    kingdom <- paste("Kingdom_", tax.clean[i,1], sep = "")
+    tax.clean[i, 2:7] <- kingdom
+  } else if (tax.clean[i,3] == ""){
+    phylum <- paste("Phylum_", tax.clean[i,2], sep = "")
+    tax.clean[i, 3:7] <- phylum
+  } else if (tax.clean[i,4] == ""){
+    class <- paste("Class_", tax.clean[i,3], sep = "")
+    tax.clean[i, 4:7] <- class
+  } else if (tax.clean[i,5] == ""){
+    order <- paste("Order_", tax.clean[i,4], sep = "")
+    tax.clean[i, 5:7] <- order
+  } else if (tax.clean[i,6] == ""){
+    family <- paste("Family_", tax.clean[i,5], sep = "")
+    tax.clean[i, 6:7] <- family
+  } else if (tax.clean[i,7] == ""){
+    tax.clean$Species[i] <- paste("Genus",tax.clean$Genus[i], sep = "_")
+  }
+}
+
+tax_table(ps.trim.sid.rare) <- as.matrix(tax.clean)
+
+ps_glom <- tax_glom(ps.trim.sid.rare, "Family")
+ps0 <- transform_sample_counts(ps_glom, function(x) x / sum(x))
+plot_bar(ps0, x="year", fill="Family")+
+  theme(legend.position="none")+
+  facet_wrap(~transect)
+
+seq.glom <- data.frame(otu_table(ps_glom))
+sqs <- rownames(tax_table(ps_glom))
+tax.glom <- as.data.frame(ps_glom@tax_table@.Data)
+
+rownames(tax.glom) == sqs
+colnames(seq.glom) <- tax.glom$Family
+
+samdf.sid.15 <- subset(samdf.sid.rare, year==15 | year==16 & transect!="Biscayne") #57
+samdf.sid.17 <- subset(samdf.sid.rare,year==17 & transect!="Biscayne") #56
+samdf.sid.18 <- subset(samdf.sid.rare,year==18 & transect!="Biscayne") #35
+
+samples.sid.15 <- rownames(samdf.sid.15)
+samples.sid.17 <- rownames(samdf.sid.17)
+samples.sid.18 <- rownames(samdf.sid.18)
+
+seq.glom.15 <- seq.glom[(row.names(seq.glom) %in% samples.sid.15), ]
+zeros.15 = seq.glom.15[,colSums(seq.glom.15) == 0]
+removecols.15 <- c(colnames(zeros.15))
+seq.glom.15.no0 <- seq.glom.15[,!(colnames(seq.glom.15) %in% removecols.15)]
+
+seq.glom.17 <- seq.glom[(row.names(seq.glom) %in% samples.sid.17), ]
+zeros.17 = seq.glom.17[,colSums(seq.glom.17) == 0]
+removecols.17 <- c(colnames(zeros.17))
+seq.glom.17.no0 <- seq.glom.17[,!(colnames(seq.glom.17) %in% removecols.17)]
+
+seq.glom.18 <- seq.glom[(row.names(seq.glom) %in% samples.sid.18), ]
+zeros.18 = seq.glom.18[,colSums(seq.glom.18) == 0]
+removecols.18 <- c(colnames(zeros.18))
+seq.glom.18.no0 <- seq.glom.18[,!(colnames(seq.glom.18) %in% removecols.18)]
+
+write.csv(seq.glom.15.no0,file="seq.glom.15.no0.csv")
+write.csv(seq.glom.17.no0,file="seq.glom.17.no0.csv")
+write.csv(seq.glom.18.no0,file="seq.glom.18.no0.csv")
 
 
 
