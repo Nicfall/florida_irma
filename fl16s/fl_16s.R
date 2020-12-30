@@ -476,18 +476,25 @@ samdf.sid.rare <- samdf.sid[!(row.names(samdf.sid) %in% row.names.remove), ]
 seqtab.sid.rare <- rrarefy(seqtab.sid.less,sample=9100)
 #rarecurve(seqtab.rare,step=100,label=FALSE)
 saveRDS(seqtab.sid.rare, file="seqtab.sid.rare9100.rds")
+seqtab.sid.rare <- readRDS(file="seqtab.sid.rare9100.rds")
 
 sid.rare.zero = seqtab.sid.rare[,colSums(seqtab.sid.rare) == 0]
-ncol(sid.rare.zero) #3661
+ncol(sid.rare.zero) #3661, 4098 for 9100
 removecols.sid <- c(colnames(sid.rare.zero))
 seqtab.sid.rare.no0 <- seqtab.sid.rare[,!(colnames(seqtab.sid.rare) %in% removecols.sid)]
 
-samdf.sid.rare$year <- as.factor(samdf.sid.rare$yea)
+samdf.sid.rare$year <- as.factor(samdf.sid.rare$year)
+samdf.sid.rare$year <- gsub("16","15",samdf.sid.rare$year)
+samdf.sid.rare$year <- as.factor(samdf.sid.rare$year)
+samdf.sid.rare.nobis <- subset(samdf.sid.rare,transect!="Biscayne")
+ggplot(data.frame(samdf.sid.rare.nobis), aes(x=year)) +
+  geom_bar()
+
 #phyloseq object but rarefied
 ps.sid.rare <- phyloseq(otu_table(seqtab.sid.rare.no0, taxa_are_rows=FALSE), 
-                    sample_data(samdf.sid.rare), 
+                    sample_data(samdf.sid.rare.nobis), 
                     tax_table(taxa2))
-ps.sid.rare #24526 taxa after removing 0s
+ps.sid.rare #24526 taxa after removing 0s, 153 samples after rarefying
 
 #### alpha diversity ####
 #Visualize alpha-diversity - ***Should be done on raw, untrimmed dataset***
@@ -528,11 +535,11 @@ gg.sh
   # geom_jitter(alpha=0.5)+
 
 gg.sh <- ggplot(df.div.nobis, aes(x=year,y=Shannon,color=year))+
-  geom_boxplot(outlier.shape=NA)+
+  geom_boxplot()+
   xlab("Year")+
   ylab("Shannon diversity")+
   theme_cowplot()+
-  facet_wrap(~transect)+
+  #facet_wrap(~transect)+
   scale_color_manual(values=c("#781C6D","#F8850F","#AE305C"),name="Time point",labels=c("Baseline","Irma","Post-Irma"))+
   scale_x_discrete(labels=c("2015","2017","2018"))+
   theme(axis.text.x=element_text(angle=45,hjust=1))
@@ -682,10 +689,10 @@ library(MCMC.OTU)
 
 #formatting the table for mcmc.otu - requires one first column that's 1 through whatever
 #& has "X" as column name
-nums.sid <- 1:nrow(seqtab.sid.no0)
-samples.sid <- rownames(seqtab.sid.no0)
+nums.sid <- 1:nrow(seqtab.sid.rare.no0) #did it another time with untrimmed, unrarefied seqtab.sid.no0
+samples.sid <- rownames(seqtab.sid.rare.no0)
 
-sid.int <- cbind(sample = 0, seqtab.sid.no0)
+sid.int <- cbind(sample = 0, seqtab.sid.rare.no0)
 sid.formcmc <- cbind(X = 0, sid.int)
 
 sid.formcmc$X <- nums.sid
@@ -761,7 +768,7 @@ gg.sh
 #### rarefy trimmed ####
 library(vegan)
 
-rarecurve(seq.trim.sid,step=100,label=FALSE) #after removing contaminats
+rarecurve(seq.trim.sid,step=100,label=FALSE) #after removing contaminants
 
 total <- rowSums(seq.trim.sid)
 toofew <- subset(total, total <2175)
